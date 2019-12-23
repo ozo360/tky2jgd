@@ -21,17 +21,16 @@
  *                                                                         *
  ***************************************************************************/
 """
-from PyQt5.QtCore import QSettings, QTranslator, qVersion, QCoreApplication
-from PyQt5.QtGui import QIcon
-from PyQt5.QtWidgets import QAction, QMessageBox
+from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
+from qgis.PyQt.QtGui import QIcon
+from qgis.PyQt.QtWidgets import QAction, QMessageBox
+from qgis.core import *
 
 # Initialize Qt resources from file resources.py
 from .resources import *
 # Import the code for the dialog
-from qgis.core import *
 from .tky2jgd_dialog import tky2jgdDialog
 import os.path
-import pyproj
 
 class tky2jgd:
     """QGIS Plugin Implementation."""
@@ -58,9 +57,7 @@ class tky2jgd:
         if os.path.exists(locale_path):
             self.translator = QTranslator()
             self.translator.load(locale_path)
-
-            if qVersion() > '4.3.3':
-                QCoreApplication.installTranslator(self.translator)
+            QCoreApplication.installTranslator(self.translator)
 
         # Declare instance attributes
         self.actions = []
@@ -69,7 +66,6 @@ class tky2jgd:
         # Check if plugin was started the first time in current QGIS session
         # Must be set in initGui() to survive plugin reloads
         self.first_start = None
-        self.sqlitePath = os.path.dirname(__file__) + "/db/db.sqlite"
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -206,8 +202,12 @@ class tky2jgd:
         crs = layer.crs().postgisSrid()
         if layer.crs().postgisSrid() != 4301:
             return
+
+        # 座標変換パラメータ辞書を生成
         self.loadPar()
+        # 座標変換クラス(4301→4612)を生成
         self.setCrsTrans()
+
         self.execTrans(layer)
         QMessageBox.information(self.dlg, 'tky2jgd', 'finished')
         
@@ -227,7 +227,7 @@ class tky2jgd:
                     # EOF
                     break
                 # 値は秒なのでここで割っておく
-                self.par[int(line[0:10])] = (float(line[10:19]) / 3600, float(line[19:28]) / 3600)
+                self.par[int(line[0:8])] = (float(line[8:18]) / 3600, float(line[18:28]) / 3600)
 
     # 座標変換処理
     def execTrans(self, layer):
