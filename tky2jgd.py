@@ -197,20 +197,28 @@ class tky2jgd:
             # substitute with your code.
             pass
 
+    ###################################
+    # 処理開始ボタンクリック
+    ###################################
     def buttonClicked(self):
-        layer = self.iface.activeLayer()
-        crs = layer.crs().postgisSrid()
-        if layer.crs().postgisSrid() != 4301:
+        self.layer = self.iface.activeLayer()
+        if not self.isScope():
             return
+
+        self.wkbType = QgsWkbTypes.displayString(self.layer.wkbType())
 
         # 座標変換パラメータ辞書を生成
         self.loadPar()
-        # 座標変換クラス(4301→4612)を生成
+        # 座標変換クラスを生成
         self.setCrsTrans()
 
-        self.execTrans(layer)
+        # 変換処理
+        self.execTrans()
         QMessageBox.information(self.dlg, 'tky2jgd', 'finished')
         
+    ###################################
+    # 変換パラメータファイルを読み込み
+    ###################################
     def loadPar(self):
         self.par = {}
         parfile = 'TKY2JGD.par'
@@ -229,8 +237,52 @@ class tky2jgd:
                 # 値は秒なのでここで割っておく
                 self.par[int(line[0:8])] = (float(line[8:18]) / 3600, float(line[18:28]) / 3600)
 
+    ###################################
+    # 変換対象レイヤかどうかを判定
+    # （ついでに変換前後のsridと緯度経度フラグを保持する）
+    ###################################
+    def isScope(self):
+        try:
+            if not isinstance(self.layer, QgsVectorLayer):
+                raise ValueError("activeLayer is not QgsVectorLayer")
+
+            self.srid = self.layer.crs().postgisSrid()
+            if self.srid == 4301:
+                self.isLonlat = True
+                self.toSrid = 4612
+            elif (self.srid > 30160 and self.srid < 30180):
+                self.isLonlat = False
+                self.toSrid = 2442 + self.srid - 30160
+            else:
+                # 対象外のSRID
+                raise ValueError("activeLayer is not Tokyo Datum")
+
+            wkbType = self.layer.wkbType()
+            # point line polygonを対象とする
+            if not QgsWkbTypes.geometryType(wkbType) in [
+                    QgsWkbTypes.PointGeometry, 
+                    QgsWkbTypes.LineGeometry, 
+                    QgsWkbTypes.PolygonGeometry]:
+                # 対象外のgeometryType
+                raise ValueError("activeLayer is out of scope geometryType")
+
+            # 2次元レイヤを対象とする
+            if QgsWkbTypes.hasZ(wkbType) or QgsWkbTypes.hasM(wkbType):
+                # 対象外のwkbType
+                raise ValueError("activeLayer is out of scope wkbType")
+
+        except ValueError as e:
+            # 対象外
+            self.iface.messageBar().pushMessage("tky2jgd <b>{}</b>".format(e), Qgis.Warning)
+            return False
+        else:
+            # 対象
+            return True
+
+    ###################################
     # 座標変換処理
-    def execTrans(self, layer):
+    ###################################
+    def execTrans(self):
         # 変換後レイヤを生成
         afterLayer = self.createAfterLayer()
 
@@ -239,26 +291,37 @@ class tky2jgd:
         fields = afterLayer.fields()
 
         inFeat = QgsFeature()
-        feats = layer.getFeatures()
+        feats = self.layer.getFeatures()
         while feats.nextFeature( inFeat ):
+            attributes = inFeat.attributes()
             beforeGeom = QgsGeometry( inFeat.geometry() )
+            if not self.isLonlat:
+                beforeGeom.transform(self.trans4301)
             afterGeom = self.moveCorrection(beforeGeom)
-            afterGeom.transform(self.crsTrans)
+            afterGeom.transform(self.transTo)
 
             feature = QgsFeature(fields)
+            feature.setAttributes(attributes)
             feature.setGeometry(afterGeom)
+            
             afterLayer.addFeature(feature)
 
         # 編集終了
         afterLayer.commitChanges()
         QgsProject.instance().addMapLayer(afterLayer)
 
+    ###################################
+    # 変換後のメモリレイヤを作成
+    ###################################
     def createAfterLayer(self):
-        # EPSG:4612のメモリレイヤを作成
-        layerUri = "multipolygon?crs=postgis:" + "4612"
-        layer = QgsVectorLayer(layerUri, "exchange", "memory")
-        return layer
+        layerUri = self.wkbType +"?crs=postgis:" + str(self.toSrid)
+        afterLayer = QgsVectorLayer(layerUri, "exchange", "memory")
+        afterLayer.dataProvider().addAttributes(self.layer.fields())
+        return afterLayer
 
+    ###################################
+    # 地物の頂点移動
+    ###################################
     def moveCorrection(self, geom):
         for i, v in enumerate(geom.vertices()):
             meshcode = self.Coordinate2MeshCode(v.y(), v.x())
@@ -266,11 +329,24 @@ class tky2jgd:
             geom.moveVertex(v.x() + correction[1], v.y() + correction[0], i)
         return geom
     
+    ###################################
+    # 座標変換クラスを生成
+    ###################################
     def setCrsTrans(self):
-        fromCrs = QgsCoordinateReferenceSystem(4301, QgsCoordinateReferenceSystem.EpsgCrsId)
-        toCrs = QgsCoordinateReferenceSystem(4612, QgsCoordinateReferenceSystem.EpsgCrsId)
-        self.crsTrans = QgsCoordinateTransform(fromCrs, toCrs, QgsProject.instance())
+        crs4301 = QgsCoordinateReferenceSystem(4301, QgsCoordinateReferenceSystem.EpsgCrsId)
+        if not self.isLonlat:
+            crsFrom = QgsCoordinateReferenceSystem(self.srid, QgsCoordinateReferenceSystem.EpsgCrsId)
+            self.trans4301 = QgsCoordinateTransform(crsFrom, crs4301, QgsProject.instance())
 
+        crsTo = QgsCoordinateReferenceSystem(self.toSrid, QgsCoordinateReferenceSystem.EpsgCrsId)
+        self.transTo = QgsCoordinateTransform(crs4301, crsTo, QgsProject.instance())
+
+    ###################################
+    # メッシュコード算出
+    # 
+    # Create by @mormor
+    # https://qiita.com/mormor/items/3643847653e21007f29d
+    ###################################
     def Coordinate2MeshCode(self, dLat, dLng ):
         # cf: http://white-bear.info/archives/1400
         # Make sure the input values are decimal 
