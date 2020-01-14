@@ -205,8 +205,8 @@ class tky2jgd:
 
         # 座標変換パラメータ辞書を生成
         self.loadPar()
-        # 座標変換クラス(4301→4612)を生成
-        self.setCrsTrans()
+        # 座標変換クラス(4301→4612)を生成<不要>
+        # self.setCrsTrans()
 
         self.execTrans(layer)
         QMessageBox.information(self.dlg, 'tky2jgd', 'finished')
@@ -243,7 +243,8 @@ class tky2jgd:
         while feats.nextFeature( inFeat ):
             beforeGeom = QgsGeometry( inFeat.geometry() )
             afterGeom = self.moveCorrection(beforeGeom)
-            afterGeom.transform(self.crsTrans)
+            # バグ修正 <冗長な変換を削除>
+            # afterGeom.transform(self.crsTrans)
 
             feature = QgsFeature(fields)
             feature.setGeometry(afterGeom)
@@ -266,10 +267,12 @@ class tky2jgd:
             geom.moveVertex(v.x() + correction[1], v.y() + correction[0], i)
         return geom
     
+    """ 緯度経度変換時にQgsCoordinateTransformは不要
     def setCrsTrans(self):
         fromCrs = QgsCoordinateReferenceSystem(4301, QgsCoordinateReferenceSystem.EpsgCrsId)
         toCrs = QgsCoordinateReferenceSystem(4612, QgsCoordinateReferenceSystem.EpsgCrsId)
         self.crsTrans = QgsCoordinateTransform(fromCrs, toCrs, QgsProject.instance())
+    """
 
     def Coordinate2MeshCode(self, dLat, dLng ):
         # cf: http://white-bear.info/archives/1400
